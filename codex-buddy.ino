@@ -32,23 +32,26 @@ static void draw_rabbit(PetState s) {
   g.setTextColor(TFT_LIGHTGREY);
   g.drawCenterString(state_names[s], g.width() / 2, 4);
 
-  // ASCII 宠物 — 固定等宽 X，3 行对齐
+  // ASCII 宠物 — setTextSize(2) 放大，固定等宽 X，3 行对齐
   uint16_t c = (s == ATTENTION) ? 0xFBE0 : (s == ERROR_ST) ? 0xF800 : TFT_WHITE;
   g.setTextColor(c);
-  g.setTextSize(1);
+  g.setTextSize(2);
   const char** lines = pet_frames[s];
-  int w = g.textWidth(pet_idle[0]);  // 所有行等长，取任意一行宽度
+  int w = g.textWidth(pet_idle[0]);
   int x = (g.width() - w) / 2;
-  int first_y = g.height() / 2 - 20;
+  int first_y = g.height() / 2 - 24;
   for (int i = 0; i < 3; i++) {
-    g.setCursor(x, first_y + i * 14);
+    g.setCursor(x, first_y + i * 20);
     g.print(lines[i]);
   }
 
-  // 按键
+  // 按键 — 动态右对齐
+  g.setTextSize(1);
   g.setTextColor(TFT_DARKGREY);
-  g.drawString("[A]next", 2, g.height() - 14);
-  g.drawString("[B]prev", g.width() - 54, g.height() - 14);
+  g.setCursor(2, g.height() - 14);  g.print("[A]next");
+  const char* r = "[B]prev";
+  g.setCursor(g.width() - g.textWidth(r) - 4, g.height() - 14);
+  g.print(r);
 
   g.endWrite();
 }
