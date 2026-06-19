@@ -40,13 +40,26 @@ static void set_state_from_ble(bool connected) {
   g_redraw = true;
 }
 
-static bool parse_token_payload(String payload, int &used, int &total) {
+static void apply_state_name(String state) {
+  state.trim();
+  state.toLowerCase();
+
+  if (state == "sleep") g_state = SLEEP;
+  else if (state == "idle") g_state = IDLE;
+  else if (state == "working") g_state = WORKING;
+  else if (state == "attention") g_state = ATTENTION;
+  else if (state == "done") g_state = DONE;
+  else if (state == "error") g_state = ERROR_ST;
+}
+
+static bool parse_token_payload(String payload, int &used, int &total, String &state) {
   payload.trim();
   int comma = payload.indexOf(',');
   if (comma <= 0) return false;
+  int second_comma = payload.indexOf(',', comma + 1);
 
   int parsed_used = payload.substring(0, comma).toInt();
-  int parsed_total = payload.substring(comma + 1).toInt();
+  int parsed_total = payload.substring(comma + 1, second_comma > 0 ? second_comma : payload.length()).toInt();
   if (parsed_total <= 0) return false;
 
   if (parsed_used < 0) parsed_used = 0;
@@ -54,6 +67,7 @@ static bool parse_token_payload(String payload, int &used, int &total) {
 
   used = parsed_used;
   total = parsed_total;
+  state = second_comma > 0 ? payload.substring(second_comma + 1) : "";
   return true;
 }
 
@@ -61,9 +75,13 @@ class TokenCharacteristicCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     int used = 0;
     int total = DEFAULT_TOKEN_TOTAL;
-    if (parse_token_payload(characteristic->getValue(), used, total)) {
+    String state = "";
+    if (parse_token_payload(characteristic->getValue(), used, total, state)) {
       g_token_used = used;
       g_token_total = total;
+      if (state.length() > 0) {
+        apply_state_name(state);
+      }
       g_redraw = true;
     }
   }

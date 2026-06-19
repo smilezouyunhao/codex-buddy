@@ -25,8 +25,11 @@ async def find_buddy(timeout: float):
     return device
 
 
-async def send_once(client: BleakClient, used: int, total: int):
-    payload = f"{used},{total}".encode("utf-8")
+async def send_once(client: BleakClient, used: int, total: int, state: str | None = None):
+    text = f"{used},{total}"
+    if state:
+        text = f"{text},{state}"
+    payload = text.encode("utf-8")
     await client.write_gatt_char(TOKEN_CHAR_UUID, payload, response=True)
     print(f"sent {payload.decode()}")
 
@@ -38,8 +41,9 @@ def latest_codex_session():
     return max(paths, key=os.path.getmtime)
 
 
-def latest_token_count(session_path: str):
-    latest = None
+def latest_codex_snapshot(session_path: str):
+    latest_token = None
+    latest_task_state = "idle"
     with open(session_path, "r", encoding="utf-8") as f:
         for line in f:
             try:
@@ -49,11 +53,15 @@ def latest_token_count(session_path: str):
 
             payload = item.get("payload", {})
             if item.get("type") == "event_msg" and payload.get("type") == "token_count":
-                latest = payload
+                latest_token = payload
+            elif item.get("type") == "event_msg" and payload.get("type") == "task_started":
+                latest_task_state = "working"
+            elif item.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                latest_task_state = "idle"
 
-    if latest is None:
+    if latest_token is None:
         raise RuntimeError(f"No token_count event found in {session_path}")
-    return latest
+    return latest_token, latest_task_state
 
 
 def token_payload_to_progress(token_payload: dict, metric: str, session_budget: int):
@@ -82,11 +90,11 @@ async def run(args):
             last_payload = None
             while True:
                 session_path = args.session or latest_codex_session()
-                token_payload = latest_token_count(session_path)
+                token_payload, state = latest_codex_snapshot(session_path)
                 used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
-                payload = (session_path, used, total)
+                payload = (session_path, used, total, state)
                 if payload != last_payload:
-                    await send_once(client, used, total)
+                    await send_once(client, used, total, state)
                     last_payload = payload
                 await asyncio.sleep(args.interval)
         elif args.demo:

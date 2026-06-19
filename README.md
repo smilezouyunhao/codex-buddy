@@ -52,6 +52,14 @@ Codex Buddy
 used,total
 ```
 
+也可以附带兔兔状态：
+
+```text
+used,total,state
+```
+
+支持的状态包括 `sleep`、`idle`、`working`、`attention`、`done`、`error`。
+
 例如：
 
 ```text
@@ -86,7 +94,9 @@ python3 send_tokens_ble.py --demo --total 10000
 python3 send_tokens_ble.py --codex
 ```
 
-默认显示 Codex primary rate limit 百分比，适合进度条。也可以显示最近一次模型请求的 token / context window：
+默认显示 Codex primary rate limit 百分比，适合进度条。脚本会读取 Codex 的任务生命周期事件：`task_started` 后发送 `working`，`task_complete` 后发送 `idle`。
+
+也可以显示最近一次模型请求的 token / context window：
 
 ```bash
 python3 send_tokens_ble.py --codex --metric last
