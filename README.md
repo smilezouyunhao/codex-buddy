@@ -1,6 +1,6 @@
-# Codex Buddy — M5Stick S3 兔兔宠物
+# Codex Buddy - M5Stick S3 兔兔宠物
 
-6 种状态（Sleep / Idle / Busy / Attention / Done / Error），M5GFX 矢量绘制。
+6 种状态的 ASCII 兔兔宠物，并通过 BLE 接收 Codex token 用量，显示底部进度条。
 
 ## 硬件
 
@@ -13,6 +13,8 @@
 |---|---|
 | M5Unified | `arduino-cli lib install M5Unified` |
 | M5GFX | `arduino-cli lib install M5GFX` |
+
+ESP32 BLE 库由 M5Stack ESP32 core 提供，不需要额外安装 Arduino 库。
 
 ## 编译 & 烧录
 
@@ -36,15 +38,55 @@ arduino-cli upload \
 | BtnA (正面) | 下一个状态 |
 | BtnB (右侧) | 上一个状态 |
 
-自动 3 秒轮播切换。
+## BLE token 进度条
+
+M5Stick S3 会广播 BLE 设备名：
+
+```text
+Codex Buddy
+```
+
+电脑端向 characteristic 写入文本：
+
+```text
+used,total
+```
+
+例如：
+
+```text
+3200,10000
+```
+
+屏幕底部会显示 token 百分比进度条。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
+
+### 电脑端脚本
+
+先安装 Python BLE 依赖：
+
+```bash
+python3 -m pip install bleak
+```
+
+发送一次模拟用量：
+
+```bash
+python3 send_tokens_ble.py --used 3200 --total 10000
+```
+
+持续发送模拟用量：
+
+```bash
+python3 send_tokens_ble.py --demo --total 10000
+```
 
 ## 状态一览
 
 | # | 状态 | 表情特征 |
 |---|---|---|
-| 1 | Sleep | 闭眼横线 + zzz 呼吸闪烁 |
-| 2 | Idle | 圆眼 + 眨眼动画（每 3s 眨一次） |
-| 3 | Busy | 专注斗鸡眼 + 汗滴 + 橙色粒子 |
-| 4 | Attention | 大眼 + 张嘴 + ⚠ 感叹号 |
-| 5 | Done | 眯眼笑 + ⭐ 星星闪烁 |
-| 6 | Error | X 眼 + 撇嘴 + 红色感叹号 |
+| 1 | Sleep | 闭眼 + zZ |
+| 2 | Idle | 圆眼 |
+| 3 | Working | 专注 |
+| 4 | Attention | 大眼 + 感叹号 |
+| 5 | Done | 微笑 + 小星星 |
+| 6 | Error | X 眼 + 问号 |
