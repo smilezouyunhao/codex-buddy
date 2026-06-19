@@ -31,13 +31,6 @@ arduino-cli upload \
   codex-buddy
 ```
 
-## 按键
-
-| 按键 | 功能 |
-|---|---|
-| BtnA (正面) | 下一个状态 |
-| BtnB (右侧) | 上一个状态 |
-
 ## BLE token 进度条
 
 M5Stick S3 会广播 BLE 设备名：
@@ -52,10 +45,10 @@ Codex Buddy
 used,total
 ```
 
-也可以附带兔兔状态：
+也可以附带兔兔状态和重置时间：
 
 ```text
-used,total,state
+used,total,state,reset
 ```
 
 支持的状态包括 `sleep`、`idle`、`working`、`attention`、`done`、`error`。
@@ -64,9 +57,10 @@ used,total,state
 
 ```text
 3200,10000
+3200,10000,working,Reset 13:05
 ```
 
-屏幕底部会显示 token 百分比进度条。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
+屏幕底部会显示 token 百分比进度条，进度条下方显示重置时间。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
 
 ### 电脑端脚本
 
@@ -94,7 +88,9 @@ python3 send_tokens_ble.py --demo --total 10000
 python3 send_tokens_ble.py --codex
 ```
 
-默认显示 Codex primary rate limit 百分比，适合进度条。脚本会读取 Codex 的任务生命周期事件：`task_started` 后发送 `working`，`task_complete` 后发送 `idle`。
+默认显示 Codex primary rate limit 百分比和 primary rate limit 重置时间。脚本会读取 Codex 的任务生命周期事件：`task_started` 后发送 `working`，`task_complete` 后发送 `done`，M5Stick S3 显示 Done 2 秒后自动回到 Idle。脚本首次启动时如果最新状态已经是 `done`，会发送 `idle`。
+
+异常状态会显示 Error：BLE 曾连接后断开，或脚本读不到 Codex 会话。
 
 也可以显示最近一次模型请求的 token / context window：
 
