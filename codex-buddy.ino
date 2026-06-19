@@ -34,6 +34,12 @@ const char** pet_frames[] = {
   pet_sleep, pet_idle, pet_working, pet_attention, pet_done, pet_error,
 };
 
+static void set_state_from_ble(bool connected) {
+  g_ble_connected = connected;
+  g_state = connected ? IDLE : SLEEP;
+  g_redraw = true;
+}
+
 static bool parse_token_payload(String payload, int &used, int &total) {
   payload.trim();
   int comma = payload.indexOf(',');
@@ -65,13 +71,11 @@ class TokenCharacteristicCallbacks : public BLECharacteristicCallbacks {
 
 class BuddyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
-    g_ble_connected = true;
-    g_redraw = true;
+    set_state_from_ble(true);
   }
 
   void onDisconnect(BLEServer *server) override {
-    g_ble_connected = false;
-    g_redraw = true;
+    set_state_from_ble(false);
     server->startAdvertising();
   }
 };

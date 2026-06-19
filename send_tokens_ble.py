@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import asyncio
-
-from bleak import BleakClient, BleakScanner
+import glob
+import json
+import os
 
 
 DEVICE_NAME = "Codex Buddy"
 TOKEN_CHAR_UUID = "7b4f6a11-6d5f-4a6e-9e6f-4f7b6f9a1001"
+DEFAULT_CODEX_SESSIONS_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
 
 
 async def find_buddy(timeout: float):
+    from bleak import BleakScanner
+
     device = await BleakScanner.find_device_by_filter(
         lambda d, ad: d.name == DEVICE_NAME or ad.local_name == DEVICE_NAME,
         timeout=timeout,
@@ -25,10 +31,65 @@ async def send_once(client: BleakClient, used: int, total: int):
     print(f"sent {payload.decode()}")
 
 
+def latest_codex_session():
+    paths = glob.glob(DEFAULT_CODEX_SESSIONS_GLOB, recursive=True)
+    if not paths:
+        raise RuntimeError("No Codex session JSONL files found under ~/.codex/sessions")
+    return max(paths, key=os.path.getmtime)
+
+
+def latest_token_count(session_path: str):
+    latest = None
+    with open(session_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            payload = item.get("payload", {})
+            if item.get("type") == "event_msg" and payload.get("type") == "token_count":
+                latest = payload
+
+    if latest is None:
+        raise RuntimeError(f"No token_count event found in {session_path}")
+    return latest
+
+
+def token_payload_to_progress(token_payload: dict, metric: str, session_budget: int):
+    info = token_payload.get("info", {})
+    rate_limits = token_payload.get("rate_limits", {})
+
+    if metric == "rate":
+        used_percent = ((rate_limits.get("primary") or {}).get("used_percent") or 0)
+        return int(round(used_percent)), 100
+
+    if metric == "last":
+        used = (info.get("last_token_usage") or {}).get("total_tokens") or 0
+        total = info.get("model_context_window") or session_budget
+        return int(used), int(total)
+
+    used = (info.get("total_token_usage") or {}).get("total_tokens") or 0
+    return int(used), int(session_budget)
+
+
 async def run(args):
+    from bleak import BleakClient
+
     device = await find_buddy(args.scan_timeout)
     async with BleakClient(device) as client:
-        if args.demo:
+        if args.codex:
+            last_payload = None
+            while True:
+                session_path = args.session or latest_codex_session()
+                token_payload = latest_token_count(session_path)
+                used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
+                payload = (session_path, used, total)
+                if payload != last_payload:
+                    await send_once(client, used, total)
+                    last_payload = payload
+                await asyncio.sleep(args.interval)
+        elif args.demo:
             used = args.used
             while True:
                 await send_once(client, used, args.total)
@@ -45,6 +106,15 @@ def main():
     parser.add_argument("--used", type=int, default=3200, help="Used tokens.")
     parser.add_argument("--total", type=int, default=10000, help="Token budget.")
     parser.add_argument("--demo", action="store_true", help="Continuously send simulated token usage.")
+    parser.add_argument("--codex", action="store_true", help="Continuously send token data from the latest Codex session JSONL.")
+    parser.add_argument(
+        "--metric",
+        choices=("rate", "last", "session"),
+        default="rate",
+        help="Codex metric to display: rate limit percent, last request tokens, or session total tokens.",
+    )
+    parser.add_argument("--session", help="Specific Codex session JSONL path. Defaults to latest under ~/.codex/sessions.")
+    parser.add_argument("--session-budget", type=int, default=2_000_000, help="Budget used for --metric session.")
     parser.add_argument("--step", type=int, default=311, help="Token increment for demo mode.")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between demo updates.")
     parser.add_argument("--scan-timeout", type=float, default=10.0, help="BLE scan timeout in seconds.")
@@ -54,6 +124,8 @@ def main():
         raise SystemExit("--total must be greater than 0")
     if args.used < 0:
         raise SystemExit("--used must be greater than or equal to 0")
+    if args.session_budget <= 0:
+        raise SystemExit("--session-budget must be greater than 0")
 
     asyncio.run(run(args))
 

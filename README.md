@@ -80,6 +80,24 @@ python3 send_tokens_ble.py --used 3200 --total 10000
 python3 send_tokens_ble.py --demo --total 10000
 ```
 
+读取本机最新 Codex 会话的真实统计并持续发送：
+
+```bash
+python3 send_tokens_ble.py --codex
+```
+
+默认显示 Codex primary rate limit 百分比，适合进度条。也可以显示最近一次模型请求的 token / context window：
+
+```bash
+python3 send_tokens_ble.py --codex --metric last
+```
+
+或显示当前会话累计 token / 自定义预算：
+
+```bash
+python3 send_tokens_ble.py --codex --metric session --session-budget 2000000
+```
+
 ## 状态一览
 
 | # | 状态 | 表情特征 |
