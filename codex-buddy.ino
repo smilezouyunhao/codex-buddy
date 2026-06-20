@@ -21,6 +21,7 @@ bool     g_redraw = true;
 
 const int DEFAULT_TOKEN_TOTAL = 10000;
 const unsigned long DONE_HOLD_MS = 5000;
+const unsigned long BATTERY_REFRESH_MS = 30000;
 int g_token_used = 0;
 int g_token_total = DEFAULT_TOKEN_TOTAL;
 bool g_ble_connected = false;
@@ -29,6 +30,23 @@ unsigned long g_done_started_at = 0;
 unsigned long g_reset_deadline_ms = 0;
 long g_reset_display_minutes = -1;
 bool g_reset_valid = false;
+int g_battery_level = -1;
+bool g_battery_charging = false;
+unsigned long g_last_battery_check_ms = 0;
+
+static void update_battery_status(bool force = false) {
+  unsigned long now = millis();
+  if (!force && now - g_last_battery_check_ms < BATTERY_REFRESH_MS) return;
+  g_last_battery_check_ms = now;
+
+  int level = M5.Power.getBatteryLevel();
+  bool charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+  if (level != g_battery_level || charging != g_battery_charging) {
+    g_battery_level = level;
+    g_battery_charging = charging;
+    g_redraw = true;
+  }
+}
 
 static void set_state_from_ble(bool connected) {
   g_ble_connected = connected;
@@ -175,6 +193,72 @@ static void draw_token_bar(int used, int total) {
   g.drawCenterString(reset_label, g.width() / 2, bar_y + 12);
 }
 
+static const char* battery_glyph(char c) {
+  switch (c) {
+    case '0': return "111101101101111";
+    case '1': return "010110010010111";
+    case '2': return "111001111100111";
+    case '3': return "111001111001111";
+    case '4': return "101101111001001";
+    case '5': return "111100111001111";
+    case '6': return "111100111101111";
+    case '7': return "111001010010010";
+    case '8': return "111101111101111";
+    case '9': return "111101111001111";
+    case '%': return "101001010100101";
+    case '+': return "000010111010000";
+    case '-': return "000000111000000";
+    default:  return "000000000000000";
+  }
+}
+
+static void draw_battery_pixel_text(int x, int y, const char* text, uint16_t color) {
+  M5GFX &g = M5.Lcd;
+  while (*text) {
+    const char* glyph = battery_glyph(*text++);
+    for (int row = 0; row < 5; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        if (glyph[row * 3 + col] == '1') g.drawPixel(x + col, y + row, color);
+      }
+    }
+    x += 4;
+  }
+}
+
+static void draw_battery_status() {
+  M5GFX &g = M5.Lcd;
+
+  uint16_t color = TFT_DARKGREY;
+  if (g_battery_level >= 0) {
+    color = g_battery_level > 50 ? TFT_GREEN
+          : g_battery_level > 20 ? TFT_ORANGE
+          : TFT_RED;
+  }
+  if (g_battery_charging) color = TFT_YELLOW;
+
+  const int x = 4;
+  const int y = 5;
+  const int body_w = 11;
+  const int body_h = 7;
+  g.drawRect(x, y, body_w, body_h, color);
+  g.fillRect(x + body_w, y + 2, 2, body_h - 4, color);
+
+  if (g_battery_level >= 0) {
+    int fill_w = (g_battery_level * (body_w - 4) + 99) / 100;
+    if (fill_w > 0) g.fillRect(x + 2, y + 2, fill_w, body_h - 4, color);
+  }
+
+  char label[8];
+  if (g_battery_level < 0) {
+    snprintf(label, sizeof(label), "--");
+  } else if (g_battery_charging) {
+    snprintf(label, sizeof(label), "%d+", g_battery_level);
+  } else {
+    snprintf(label, sizeof(label), "%d%%", g_battery_level);
+  }
+  draw_battery_pixel_text(x + body_w + 4, 6, label, color);
+}
+
 static void draw_rabbit(PetState s) {
   M5GFX &g = M5.Lcd;
   g.startWrite();
@@ -184,6 +268,7 @@ static void draw_rabbit(PetState s) {
   g.setTextSize(1);
   g.setTextColor(TFT_LIGHTGREY);
   g.drawCenterString(state_names[s], g.width() / 2, 4);
+  draw_battery_status();
   g.setTextColor(g_ble_connected ? TFT_GREEN : TFT_DARKGREY);
   g.drawRightString("BLE", g.width() - 4, 4);
 
@@ -214,12 +299,14 @@ void setup() {
   M5.begin(cfg);
   M5.Lcd.setRotation(0);
   M5.Lcd.fillScreen(TFT_BLACK);
+  update_battery_status(true);
   setup_ble();
   draw_rabbit(SLEEP);
 }
 
 void loop() {
   M5.update();
+  update_battery_status();
 
   if (g_ble_connected && g_state == DONE && millis() - g_done_started_at >= DONE_HOLD_MS) {
     g_state = IDLE;
