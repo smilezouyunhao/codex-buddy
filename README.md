@@ -61,6 +61,7 @@ used,total,state,reset_seconds
 ```
 
 屏幕底部会显示 token 百分比进度条，进度条下方显示距离重置还有多久，例如 `Reset in 3h 30m`。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
+如果会话中最后一条 usage 的重置时间已经过去，脚本会把过期用量视为 `0%`，不会在首次连接时重复显示刷新前的数值。
 
 ### 电脑端脚本
 
@@ -91,6 +92,7 @@ python3 send_tokens_ble.py --codex
 默认显示 Codex primary rate limit 百分比和 primary rate limit 重置时间。脚本会读取 Codex 的任务生命周期事件：`task_started` 后发送 `working`，`task_complete` 后发送 `done`，M5Stick S3 显示 Done 2 秒后自动回到 Idle。脚本首次启动时如果最新状态已经是 `done`，会发送 `idle`。
 
 异常状态会显示 Error：BLE 曾连接后断开，或脚本读不到 Codex 会话。
+S3 重启或 BLE 意外断开后，`--codex` 模式会自动重新扫描连接，并立即重发当前用量和状态。
 
 也可以显示最近一次模型请求的 token / context window：
 

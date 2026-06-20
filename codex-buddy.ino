@@ -158,19 +158,20 @@ static void draw_token_bar(int used, int total) {
   if (ratio >= 0.75f) bar_color = TFT_ORANGE;
   if (ratio >= 0.90f) bar_color = TFT_RED;
 
-  int margin = 12;
-  int bar_h = 10;
+  int margin = 5;
+  int bar_h = 14;
   int bar_w = g.width() - margin * 2;
   int bar_x = margin;
-  int bar_y = g.height() - 28;
+  int bar_y = g.height() - 38;
 
   char label[32];
   int percent = (int)(ratio * 100.0f + 0.5f);
-  snprintf(label, sizeof(label), "Token %d%%", percent);
+  snprintf(label, sizeof(label), "TOKEN %d%%", percent);
 
-  g.setTextSize(1);
+  g.setFont(&fonts::Font0);
+  g.setTextSize(2);
   g.setTextColor(TFT_LIGHTGREY);
-  g.drawCenterString(label, g.width() / 2, bar_y - 13);
+  g.drawCenterString(label, g.width() / 2, bar_y - 18);
 
   g.drawRoundRect(bar_x, bar_y, bar_w, bar_h, 3, TFT_DARKGREY);
   int fill_w = (int)((bar_w - 4) * ratio);
@@ -178,19 +179,19 @@ static void draw_token_bar(int used, int total) {
     g.fillRoundRect(bar_x + 2, bar_y + 2, fill_w, bar_h - 4, 2, bar_color);
   }
 
-  char reset_label[24] = "Reset in --";
+  char reset_label[24] = "RESET --";
   if (g_reset_valid) {
     long remaining_ms = (long)(g_reset_deadline_ms - millis());
     unsigned long remaining_minutes = remaining_ms > 0 ? ((unsigned long)remaining_ms + 59999UL) / 60000UL : 0;
     g_reset_display_minutes = remaining_minutes;
     if (remaining_minutes == 0) {
-      snprintf(reset_label, sizeof(reset_label), "Reset now");
+      snprintf(reset_label, sizeof(reset_label), "RESET NOW");
     } else {
-      snprintf(reset_label, sizeof(reset_label), "Reset in %luh %lum", remaining_minutes / 60, remaining_minutes % 60);
+      snprintf(reset_label, sizeof(reset_label), "RESET %luH%02luM", remaining_minutes / 60, remaining_minutes % 60);
     }
   }
   g.setTextColor(TFT_DARKGREY);
-  g.drawCenterString(reset_label, g.width() / 2, bar_y + 12);
+  g.drawCenterString(reset_label, g.width() / 2, g.height() - 17);
 }
 
 static const char* battery_glyph(char c) {
@@ -264,17 +265,19 @@ static void draw_rabbit(PetState s) {
   g.startWrite();
   g.fillScreen(TFT_BLACK);
 
-  // 标题
+  // 顶栏和像素风状态标题
+  g.setFont(&fonts::Font0);
   g.setTextSize(1);
-  g.setTextColor(TFT_LIGHTGREY);
-  g.drawCenterString(state_names[s], g.width() / 2, 4);
   draw_battery_status();
   g.setTextColor(g_ble_connected ? TFT_GREEN : TFT_DARKGREY);
   g.drawRightString("BLE", g.width() - 4, 4);
+  g.setTextSize(2);
+  g.setTextColor(TFT_LIGHTGREY);
+  g.drawCenterString(state_names[s], g.width() / 2, 17);
 
   // 72x72 RGB565 像素精灵；洋红色作为透明色，不绘制底图方框。
   int rabbit_x = (g.width() - RABBIT_WIDTH) / 2;
-  int content_top = 18;
+  int content_top = 36;
   int content_bottom = g.height() - 45;
   int rabbit_y = content_top + (content_bottom - content_top - RABBIT_HEIGHT) / 2;
   bool previous_swap_bytes = g.getSwapBytes();

@@ -72,7 +72,11 @@ def token_payload_to_progress(token_payload: dict, metric: str, session_budget: 
     rate_limits = token_payload.get("rate_limits") or {}
 
     if metric == "rate":
-        used_percent = ((rate_limits.get("primary") or {}).get("used_percent") or 0)
+        primary = rate_limits.get("primary") or {}
+        resets_at = primary.get("resets_at")
+        if resets_at and resets_at <= time.time():
+            return 0, 100
+        used_percent = primary.get("used_percent") or 0
         return int(round(used_percent)), 100
 
     if metric == "last":
@@ -89,50 +93,73 @@ def token_payload_to_reset_at(token_payload: dict):
     return primary.get("resets_at")
 
 
+async def run_codex(args, client_type):
+    last_used = 0
+    last_total = 100
+    last_reset_at = None
+    last_error = None
+    last_ble_error = None
+    first_codex_snapshot = True
+    suppress_stale_done = False
+
+    while True:
+        disconnected = asyncio.Event()
+        try:
+            device = await find_buddy(args.scan_timeout)
+            async with client_type(device, disconnected_callback=lambda _: disconnected.set()) as client:
+                print(f"connected {DEVICE_NAME}")
+                last_ble_error = None
+                last_payload = None
+                while client.is_connected and not disconnected.is_set():
+                    try:
+                        session_path = args.session or latest_codex_session()
+                        token_payload, state = latest_codex_snapshot(session_path)
+                        used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
+                        reset_at = token_payload_to_reset_at(token_payload)
+                        if first_codex_snapshot:
+                            suppress_stale_done = state == "done"
+                            first_codex_snapshot = False
+                        if suppress_stale_done and state == "done":
+                            state = "idle"
+                        elif suppress_stale_done and state == "working":
+                            suppress_stale_done = False
+                        last_used, last_total = used, total
+                        last_reset_at = reset_at
+                        last_error = None
+                    except Exception as exc:
+                        session_path = args.session or "codex-session-unavailable"
+                        used, total, state, reset_at = last_used, last_total, "error", last_reset_at
+                        error = str(exc)
+                        if error != last_error:
+                            print(f"codex read error: {error}")
+                            last_error = error
+
+                    payload = (session_path, used, total, state, reset_at)
+                    if payload != last_payload:
+                        reset_seconds = -1 if reset_at is None else max(0, int(reset_at - time.time()))
+                        await send_once(client, used, total, state, reset_seconds)
+                        last_payload = payload
+                    await asyncio.sleep(args.interval)
+        except Exception as exc:
+            error = str(exc)
+            if error != last_ble_error:
+                print(f"BLE connection error: {error}")
+                last_ble_error = error
+
+        print(f"reconnecting in {args.reconnect_delay:g}s...")
+        await asyncio.sleep(args.reconnect_delay)
+
+
 async def run(args):
     from bleak import BleakClient
 
+    if args.codex:
+        await run_codex(args, BleakClient)
+        return
+
     device = await find_buddy(args.scan_timeout)
     async with BleakClient(device) as client:
-        if args.codex:
-            last_payload = None
-            last_used = 0
-            last_total = 100
-            last_reset_at = None
-            last_error = None
-            first_codex_snapshot = True
-            suppress_stale_done = False
-            while True:
-                try:
-                    session_path = args.session or latest_codex_session()
-                    token_payload, state = latest_codex_snapshot(session_path)
-                    used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
-                    reset_at = token_payload_to_reset_at(token_payload)
-                    if first_codex_snapshot:
-                        suppress_stale_done = state == "done"
-                        first_codex_snapshot = False
-                    if suppress_stale_done and state == "done":
-                        state = "idle"
-                    elif suppress_stale_done and state == "working":
-                        suppress_stale_done = False
-                    last_used, last_total = used, total
-                    last_reset_at = reset_at
-                    last_error = None
-                except Exception as exc:
-                    session_path = args.session or "codex-session-unavailable"
-                    used, total, state, reset_at = last_used, last_total, "error", last_reset_at
-                    error = str(exc)
-                    if error != last_error:
-                        print(f"codex read error: {error}")
-                        last_error = error
-
-                payload = (session_path, used, total, state, reset_at)
-                if payload != last_payload:
-                    reset_seconds = -1 if reset_at is None else max(0, int(reset_at - time.time()))
-                    await send_once(client, used, total, state, reset_seconds)
-                    last_payload = payload
-                await asyncio.sleep(args.interval)
-        elif args.demo:
+        if args.demo:
             used = args.used
             while True:
                 await send_once(client, used, args.total)
@@ -161,6 +188,7 @@ def main():
     parser.add_argument("--step", type=int, default=311, help="Token increment for demo mode.")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between demo updates.")
     parser.add_argument("--scan-timeout", type=float, default=10.0, help="BLE scan timeout in seconds.")
+    parser.add_argument("--reconnect-delay", type=float, default=2.0, help="Seconds before reconnecting after BLE disconnects.")
     args = parser.parse_args()
 
     if args.total <= 0:
@@ -169,6 +197,8 @@ def main():
         raise SystemExit("--used must be greater than or equal to 0")
     if args.session_budget <= 0:
         raise SystemExit("--session-budget must be greater than 0")
+    if args.reconnect_delay < 0:
+        raise SystemExit("--reconnect-delay must be greater than or equal to 0")
 
     asyncio.run(run(args))
 
