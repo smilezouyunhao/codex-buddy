@@ -189,7 +189,9 @@ static void draw_rabbit(PetState s) {
 
   // 72x72 RGB565 像素精灵；洋红色作为透明色，不绘制底图方框。
   int rabbit_x = (g.width() - RABBIT_WIDTH) / 2;
-  int rabbit_y = 18;
+  int content_top = 18;
+  int content_bottom = g.height() - 45;
+  int rabbit_y = content_top + (content_bottom - content_top - RABBIT_HEIGHT) / 2;
   bool previous_swap_bytes = g.getSwapBytes();
   g.setSwapBytes(true);  // rabbit_bitmaps.h 使用原生 RGB565，而非预交换字节序。
   g.pushImage(
@@ -210,7 +212,7 @@ static void draw_rabbit(PetState s) {
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
-  M5.Lcd.setRotation(1);
+  M5.Lcd.setRotation(0);
   M5.Lcd.fillScreen(TFT_BLACK);
   setup_ble();
   draw_rabbit(SLEEP);
