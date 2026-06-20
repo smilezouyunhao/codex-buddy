@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime
 import glob
 import json
 import os
+import time
 
 
 DEVICE_NAME = "Codex Buddy"
@@ -26,12 +26,12 @@ async def find_buddy(timeout: float):
     return device
 
 
-async def send_once(client: BleakClient, used: int, total: int, state: str | None = None, reset_label: str | None = None):
+async def send_once(client: BleakClient, used: int, total: int, state: str | None = None, reset_seconds: int | None = None):
     text = f"{used},{total}"
     if state:
         text = f"{text},{state}"
-    if reset_label:
-        text = f"{text},{reset_label}"
+    if reset_seconds is not None:
+        text = f"{text},{reset_seconds}"
     payload = text.encode("utf-8")
     await client.write_gatt_char(TOKEN_CHAR_UUID, payload, response=True)
     print(f"sent {payload.decode()}")
@@ -69,7 +69,7 @@ def latest_codex_snapshot(session_path: str):
 
 def token_payload_to_progress(token_payload: dict, metric: str, session_budget: int):
     info = token_payload.get("info", {})
-    rate_limits = token_payload.get("rate_limits", {})
+    rate_limits = token_payload.get("rate_limits") or {}
 
     if metric == "rate":
         used_percent = ((rate_limits.get("primary") or {}).get("used_percent") or 0)
@@ -84,12 +84,9 @@ def token_payload_to_progress(token_payload: dict, metric: str, session_budget: 
     return int(used), int(session_budget)
 
 
-def token_payload_to_reset_label(token_payload: dict):
-    primary = (token_payload.get("rate_limits", {}).get("primary") or {})
-    resets_at = primary.get("resets_at")
-    if not resets_at:
-        return "Reset --:--"
-    return f"Reset {datetime.fromtimestamp(resets_at).strftime('%H:%M')}"
+def token_payload_to_reset_at(token_payload: dict):
+    primary = ((token_payload.get("rate_limits") or {}).get("primary") or {})
+    return primary.get("resets_at")
 
 
 async def run(args):
@@ -101,32 +98,38 @@ async def run(args):
             last_payload = None
             last_used = 0
             last_total = 100
-            last_reset_label = "Reset --:--"
+            last_reset_at = None
             last_error = None
             first_codex_snapshot = True
+            suppress_stale_done = False
             while True:
                 try:
                     session_path = args.session or latest_codex_session()
                     token_payload, state = latest_codex_snapshot(session_path)
                     used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
-                    reset_label = token_payload_to_reset_label(token_payload)
-                    if first_codex_snapshot and state == "done":
+                    reset_at = token_payload_to_reset_at(token_payload)
+                    if first_codex_snapshot:
+                        suppress_stale_done = state == "done"
+                        first_codex_snapshot = False
+                    if suppress_stale_done and state == "done":
                         state = "idle"
-                    first_codex_snapshot = False
+                    elif suppress_stale_done and state == "working":
+                        suppress_stale_done = False
                     last_used, last_total = used, total
-                    last_reset_label = reset_label
+                    last_reset_at = reset_at
                     last_error = None
                 except Exception as exc:
                     session_path = args.session or "codex-session-unavailable"
-                    used, total, state, reset_label = last_used, last_total, "error", last_reset_label
+                    used, total, state, reset_at = last_used, last_total, "error", last_reset_at
                     error = str(exc)
                     if error != last_error:
                         print(f"codex read error: {error}")
                         last_error = error
 
-                payload = (session_path, used, total, state, reset_label)
+                payload = (session_path, used, total, state, reset_at)
                 if payload != last_payload:
-                    await send_once(client, used, total, state, reset_label)
+                    reset_seconds = -1 if reset_at is None else max(0, int(reset_at - time.time()))
+                    await send_once(client, used, total, state, reset_seconds)
                     last_payload = payload
                 await asyncio.sleep(args.interval)
         elif args.demo:

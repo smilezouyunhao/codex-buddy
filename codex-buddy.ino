@@ -1,12 +1,13 @@
 /*
- * Codex Buddy — M5Stick S3 ASCII 兔兔
- * BLE 联动状态，动态居中，仅面部
+ * Codex Buddy — M5Stick S3 像素兔兔
+ * BLE 联动状态，RGB565 像素精灵
  */
 
 #include <M5Unified.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include "rabbit_bitmaps.h"
 
 const char* BLE_DEVICE_NAME = "Codex Buddy";
 const char* TOKEN_SERVICE_UUID = "7b4f6a10-6d5f-4a6e-9e6f-4f7b6f9a1001";
@@ -25,18 +26,9 @@ int g_token_total = DEFAULT_TOKEN_TOTAL;
 bool g_ble_connected = false;
 bool g_ble_was_connected = false;
 unsigned long g_done_started_at = 0;
-char g_reset_label[20] = "Reset --:--";
-
-const char* pet_sleep[]     = { " (\\_/) ", " (-.-) ", "  zZ   " };
-const char* pet_idle[]      = { " (\\_/) ", " (o.o) ", "  > <  " };
-const char* pet_working[]   = { " (\\_/) ", " (._.) ", " /|_|\\ " };
-const char* pet_attention[] = { " (\\_/) ", " (O.O) ", "  !!!  " };
-const char* pet_done[]      = { " (\\_/) ", " (^.^) ", "  /*   " };
-const char* pet_error[]     = { " (\\_/) ", " (x.x) ", "  ???  " };
-
-const char** pet_frames[] = {
-  pet_sleep, pet_idle, pet_working, pet_attention, pet_done, pet_error,
-};
+unsigned long g_reset_deadline_ms = 0;
+long g_reset_display_minutes = -1;
+bool g_reset_valid = false;
 
 static void set_state_from_ble(bool connected) {
   g_ble_connected = connected;
@@ -64,7 +56,7 @@ static void apply_state_name(String state) {
   else if (state == "error") g_state = ERROR_ST;
 }
 
-static bool parse_token_payload(String payload, int &used, int &total, String &state, String &reset_label) {
+static bool parse_token_payload(String payload, int &used, int &total, String &state, long &reset_seconds) {
   payload.trim();
   int comma = payload.indexOf(',');
   if (comma <= 0) return false;
@@ -81,7 +73,7 @@ static bool parse_token_payload(String payload, int &used, int &total, String &s
   used = parsed_used;
   total = parsed_total;
   state = second_comma > 0 ? payload.substring(second_comma + 1, third_comma > 0 ? third_comma : payload.length()) : "";
-  reset_label = third_comma > 0 ? payload.substring(third_comma + 1) : "";
+  reset_seconds = third_comma > 0 ? payload.substring(third_comma + 1).toInt() : -1;
   return true;
 }
 
@@ -90,13 +82,13 @@ class TokenCharacteristicCallbacks : public BLECharacteristicCallbacks {
     int used = 0;
     int total = DEFAULT_TOKEN_TOTAL;
     String state = "";
-    String reset_label = "";
-    if (parse_token_payload(characteristic->getValue(), used, total, state, reset_label)) {
+    long reset_seconds = -1;
+    if (parse_token_payload(characteristic->getValue(), used, total, state, reset_seconds)) {
       g_token_used = used;
       g_token_total = total;
-      if (reset_label.length() > 0) {
-        reset_label.toCharArray(g_reset_label, sizeof(g_reset_label));
-      }
+      g_reset_valid = reset_seconds >= 0;
+      g_reset_deadline_ms = millis() + (unsigned long)max(0L, reset_seconds) * 1000UL;
+      g_reset_display_minutes = -1;
       if (state.length() > 0) {
         apply_state_name(state);
       }
@@ -168,8 +160,19 @@ static void draw_token_bar(int used, int total) {
     g.fillRoundRect(bar_x + 2, bar_y + 2, fill_w, bar_h - 4, 2, bar_color);
   }
 
+  char reset_label[24] = "Reset in --";
+  if (g_reset_valid) {
+    long remaining_ms = (long)(g_reset_deadline_ms - millis());
+    unsigned long remaining_minutes = remaining_ms > 0 ? ((unsigned long)remaining_ms + 59999UL) / 60000UL : 0;
+    g_reset_display_minutes = remaining_minutes;
+    if (remaining_minutes == 0) {
+      snprintf(reset_label, sizeof(reset_label), "Reset now");
+    } else {
+      snprintf(reset_label, sizeof(reset_label), "Reset in %luh %lum", remaining_minutes / 60, remaining_minutes % 60);
+    }
+  }
   g.setTextColor(TFT_DARKGREY);
-  g.drawCenterString(g_reset_label, g.width() / 2, bar_y + 12);
+  g.drawCenterString(reset_label, g.width() / 2, bar_y + 12);
 }
 
 static void draw_rabbit(PetState s) {
@@ -184,18 +187,20 @@ static void draw_rabbit(PetState s) {
   g.setTextColor(g_ble_connected ? TFT_GREEN : TFT_DARKGREY);
   g.drawRightString("BLE", g.width() - 4, 4);
 
-  // ASCII 宠物 — setTextSize(2) 放大，固定等宽 X，3 行对齐
-  uint16_t c = (s == ATTENTION) ? 0xFBE0 : (s == DONE) ? TFT_GREEN : (s == ERROR_ST) ? 0xF800 : TFT_WHITE;
-  g.setTextColor(c);
-  g.setTextSize(2);
-  const char** lines = pet_frames[s];
-  int w = g.textWidth(pet_idle[0]);
-  int x = (g.width() - w) / 2;
-  int first_y = g.height() / 2 - 28;
-  for (int i = 0; i < 3; i++) {
-    g.setCursor(x, first_y + i * 20);
-    g.print(lines[i]);
-  }
+  // 72x72 RGB565 像素精灵；洋红色作为透明色，不绘制底图方框。
+  int rabbit_x = (g.width() - RABBIT_WIDTH) / 2;
+  int rabbit_y = 18;
+  bool previous_swap_bytes = g.getSwapBytes();
+  g.setSwapBytes(true);  // rabbit_bitmaps.h 使用原生 RGB565，而非预交换字节序。
+  g.pushImage(
+    rabbit_x,
+    rabbit_y,
+    RABBIT_WIDTH,
+    RABBIT_HEIGHT,
+    rabbit_bitmaps[s],
+    RABBIT_TRANSPARENT
+  );
+  g.setSwapBytes(previous_swap_bytes);
 
   draw_token_bar(g_token_used, g_token_total);
 
@@ -217,6 +222,12 @@ void loop() {
   if (g_ble_connected && g_state == DONE && millis() - g_done_started_at >= DONE_HOLD_MS) {
     g_state = IDLE;
     g_redraw = true;
+  }
+
+  if (g_reset_valid) {
+    long remaining_ms = (long)(g_reset_deadline_ms - millis());
+    long remaining_minutes = remaining_ms > 0 ? ((unsigned long)remaining_ms + 59999UL) / 60000UL : 0;
+    if (remaining_minutes != g_reset_display_minutes) g_redraw = true;
   }
 
   if (g_redraw) { g_redraw = false; draw_rabbit(g_state); }

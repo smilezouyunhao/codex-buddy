@@ -1,6 +1,6 @@
 # Codex Buddy - M5Stick S3 兔兔宠物
 
-6 种状态的 ASCII 兔兔宠物，并通过 BLE 接收 Codex token 用量，显示底部进度条。
+6 种状态的像素风兔兔宠物，并通过 BLE 接收 Codex token 用量，显示底部进度条。
 
 ## 硬件
 
@@ -48,7 +48,7 @@ used,total
 也可以附带兔兔状态和重置时间：
 
 ```text
-used,total,state,reset
+used,total,state,reset_seconds
 ```
 
 支持的状态包括 `sleep`、`idle`、`working`、`attention`、`done`、`error`。
@@ -57,10 +57,10 @@ used,total,state,reset
 
 ```text
 3200,10000
-3200,10000,working,Reset 13:05
+3200,10000,working,12600
 ```
 
-屏幕底部会显示 token 百分比进度条，进度条下方显示重置时间。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
+屏幕底部会显示 token 百分比进度条，进度条下方显示距离重置还有多久，例如 `Reset in 3h 30m`。BLE 未连接时右上角 `BLE` 为灰色，连接后为绿色。
 
 ### 电脑端脚本
 
@@ -106,11 +106,11 @@ python3 send_tokens_ble.py --codex --metric session --session-budget 2000000
 
 ## 状态一览
 
-| # | 状态 | 表情特征 |
+| # | 状态 | 像素动作 |
 |---|---|---|
-| 1 | Sleep | 闭眼 + zZ |
-| 2 | Idle | 圆眼 |
-| 3 | Working | 专注 |
-| 4 | Attention | 大眼 + 感叹号 |
-| 5 | Done | 微笑 + 小星星 |
-| 6 | Error | X 眼 + 问号 |
+| 1 | Sleep | 趴下休息 |
+| 2 | Idle | 站立待机 |
+| 3 | Working | 专注敲电脑 |
+| 4 | Attention | 竖耳惊叹 |
+| 5 | Done | 举爪庆祝 + 星星 |
+| 6 | Error | 垂耳 + X 眼 + 问号 |
