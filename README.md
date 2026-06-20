@@ -2,6 +2,12 @@
 
 6 种状态的像素风兔兔宠物，并通过 BLE 接收 Codex token 用量，显示底部进度条。
 
+界面使用 135x240 赛博终端像素背景。背景 PNG 位于 `assets/backgrounds/`，可通过以下命令重新生成固件位图：
+
+```bash
+python3 scripts/generate-background-bitmap.py
+```
+
 ## 硬件
 
 - M5Stick S3
