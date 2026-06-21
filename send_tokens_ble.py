@@ -267,8 +267,12 @@ def main():
         raise SystemExit("--total must be greater than 0")
     if args.used < 0:
         raise SystemExit("--used must be greater than or equal to 0")
+    if args.used > args.total:
+        raise SystemExit("--used must be less than or equal to --total")
     if args.session_budget <= 0:
         raise SystemExit("--session-budget must be greater than 0")
+    if args.step < 0:
+        raise SystemExit("--step must be greater than or equal to 0")
     if args.interval <= 0:
         raise SystemExit("--interval must be greater than 0")
     if args.scan_timeout <= 0:

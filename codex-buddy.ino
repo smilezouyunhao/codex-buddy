@@ -395,6 +395,13 @@ void setup() {
   g_buddy_event_queue = xQueueCreate(16, sizeof(BuddyEvent));
   M5.Lcd.setRotation(0);
   M5.Lcd.fillScreen(TFT_BLACK);
+  if (g_buddy_event_queue == nullptr) {
+    Serial.println("Failed to create Buddy event queue");
+    M5.Lcd.setFont(&fonts::Font0);
+    M5.Lcd.setTextColor(TFT_RED);
+    M5.Lcd.drawCenterString("QUEUE ERROR", M5.Lcd.width() / 2, M5.Lcd.height() / 2);
+    while (true) delay(1000);
+  }
   update_battery_status(true);
   setup_ble();
   draw_rabbit(SLEEP);
