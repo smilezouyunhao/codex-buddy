@@ -4,3 +4,12 @@ build/
 *.map
 .DS_Store
 __pycache__/
+
+# Generated previews and local-only artwork review files
+assets/backgrounds/cyber-terminal-135x240.png
+assets/rabbit-animation/pixel/states/72x72/
+assets/rabbit-animation/pixel/states/rabbit-states-preview.png
+assets/rabbit-animation/pixel/states/rabbit-states-approved.png
+
+# Legacy local GIF helper
+scripts/build-pixel-rabbit-gif.sh

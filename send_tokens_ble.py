@@ -7,11 +7,14 @@ import glob
 import json
 import os
 import time
+from datetime import date, timedelta
 
 
 DEVICE_NAME = "Codex Buddy"
 TOKEN_CHAR_UUID = "7b4f6a11-6d5f-4a6e-9e6f-4f7b6f9a1001"
 DEFAULT_CODEX_SESSIONS_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
+CODEX_SESSIONS_ROOT = os.path.expanduser("~/.codex/sessions")
+SESSION_SCAN_INTERVAL = 5.0
 
 
 async def find_buddy(timeout: float):
@@ -38,33 +41,86 @@ async def send_once(client: BleakClient, used: int, total: int, state: str | Non
 
 
 def latest_codex_session():
-    paths = glob.glob(DEFAULT_CODEX_SESSIONS_GLOB, recursive=True)
+    paths = []
+    today = date.today()
+    for day in (today, today - timedelta(days=1)):
+        day_dir = os.path.join(CODEX_SESSIONS_ROOT, day.strftime("%Y/%m/%d"))
+        paths.extend(glob.glob(os.path.join(day_dir, "*.jsonl")))
+    if not paths:
+        # Preserve compatibility with custom/legacy layouts without making the
+        # full-history scan part of the normal polling path.
+        paths = glob.glob(DEFAULT_CODEX_SESSIONS_GLOB, recursive=True)
     if not paths:
         raise RuntimeError("No Codex session JSONL files found under ~/.codex/sessions")
     return max(paths, key=os.path.getmtime)
 
 
-def latest_codex_snapshot(session_path: str):
-    latest_token = None
-    latest_task_state = "idle"
-    with open(session_path, "r", encoding="utf-8") as f:
-        for line in f:
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+class CodexSessionReader:
+    """Incrementally read the active Codex JSONL session."""
 
-            payload = item.get("payload", {})
-            if item.get("type") == "event_msg" and payload.get("type") == "token_count":
-                latest_token = payload
-            elif item.get("type") == "event_msg" and payload.get("type") == "task_started":
-                latest_task_state = "working"
-            elif item.get("type") == "event_msg" and payload.get("type") == "task_complete":
-                latest_task_state = "done"
+    def __init__(self, session_path: str | None = None, scan_interval: float = SESSION_SCAN_INTERVAL):
+        self.session_path = session_path
+        self.scan_interval = scan_interval
+        self.path = None
+        self.offset = 0
+        self.latest_token = None
+        self.latest_task_state = "idle"
+        self.last_scan_at = 0.0
 
-    if latest_token is None:
-        raise RuntimeError(f"No token_count event found in {session_path}")
-    return latest_token, latest_task_state
+    def _resolve_path(self):
+        if self.session_path:
+            return self.session_path
+
+        now = time.monotonic()
+        if self.path is None or now - self.last_scan_at >= self.scan_interval:
+            self.last_scan_at = now
+            return latest_codex_session()
+        return self.path
+
+    def _reset(self, path: str):
+        self.path = path
+        self.offset = 0
+        self.latest_token = None
+        self.latest_task_state = "idle"
+
+    def snapshot(self):
+        path = self._resolve_path()
+        if path != self.path:
+            self._reset(path)
+
+        if os.path.getsize(path) < self.offset:
+            self._reset(path)
+
+        with open(path, "r", encoding="utf-8") as f:
+            f.seek(self.offset)
+            while True:
+                line_start = f.tell()
+                line = f.readline()
+                if not line:
+                    break
+                if not line.endswith("\n"):
+                    # Leave an incomplete append for the next polling cycle.
+                    self.offset = line_start
+                    break
+                self.offset = f.tell()
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                payload = item.get("payload", {})
+                if item.get("type") != "event_msg":
+                    continue
+                if payload.get("type") == "token_count":
+                    self.latest_token = payload
+                elif payload.get("type") == "task_started":
+                    self.latest_task_state = "working"
+                elif payload.get("type") == "task_complete":
+                    self.latest_task_state = "done"
+
+        if self.latest_token is None:
+            raise RuntimeError(f"No token_count event found in {path}")
+        return path, self.latest_token, self.latest_task_state
 
 
 def token_payload_to_progress(token_payload: dict, metric: str, session_budget: int):
@@ -99,8 +155,9 @@ async def run_codex(args, client_type):
     last_reset_at = None
     last_error = None
     last_ble_error = None
+    session_reader = CodexSessionReader(args.session)
     first_codex_snapshot = True
-    suppress_stale_done = False
+    delivered_done_sessions = set()
 
     while True:
         disconnected = asyncio.Event()
@@ -110,19 +167,25 @@ async def run_codex(args, client_type):
                 print(f"connected {DEVICE_NAME}")
                 last_ble_error = None
                 last_payload = None
+                done_sent_on_connection = set()
                 while client.is_connected and not disconnected.is_set():
                     try:
-                        session_path = args.session or latest_codex_session()
-                        token_payload, state = latest_codex_snapshot(session_path)
+                        session_path, token_payload, state = session_reader.snapshot()
                         used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
                         reset_at = token_payload_to_reset_at(token_payload)
                         if first_codex_snapshot:
-                            suppress_stale_done = state == "done"
+                            if state == "done":
+                                delivered_done_sessions.add(session_path)
                             first_codex_snapshot = False
-                        if suppress_stale_done and state == "done":
+                        if state == "working":
+                            delivered_done_sessions.discard(session_path)
+                            done_sent_on_connection.discard(session_path)
+                        elif (
+                            state == "done"
+                            and session_path in delivered_done_sessions
+                            and session_path not in done_sent_on_connection
+                        ):
                             state = "idle"
-                        elif suppress_stale_done and state == "working":
-                            suppress_stale_done = False
                         last_used, last_total = used, total
                         last_reset_at = reset_at
                         last_error = None
@@ -138,6 +201,9 @@ async def run_codex(args, client_type):
                     if payload != last_payload:
                         reset_seconds = -1 if reset_at is None else max(0, int(reset_at - time.time()))
                         await send_once(client, used, total, state, reset_seconds)
+                        if state == "done":
+                            delivered_done_sessions.add(session_path)
+                            done_sent_on_connection.add(session_path)
                         last_payload = payload
                     await asyncio.sleep(args.interval)
         except Exception as exc:
