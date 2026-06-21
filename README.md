@@ -74,7 +74,7 @@ used,total,state,reset_seconds
 先安装 Python BLE 和图片生成依赖：
 
 ```bash
-python3 -m pip install bleak pillow
+python3 -m pip install -r requirements.txt
 ```
 
 发送一次模拟用量：

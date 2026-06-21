@@ -6,8 +6,7 @@
 #include <M5Unified.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
-#include <BLEUtils.h>
-#include <limits.h>
+#include <climits>
 #include "background_bitmap.h"
 #include "rabbit_bitmaps.h"
 
@@ -137,7 +136,9 @@ static bool parse_token_payload(String payload, int &used, int &total, String &s
 
 static void enqueue_buddy_event(const BuddyEvent &event) {
   if (g_buddy_event_queue != nullptr) {
-    xQueueSend(g_buddy_event_queue, &event, portMAX_DELAY);
+    if (xQueueSend(g_buddy_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
+      Serial.println("Buddy event queue full; event dropped");
+    }
   }
 }
 
@@ -225,7 +226,13 @@ static void setup_ble() {
   server->startAdvertising();
 }
 
-static void draw_token_bar(int used, int total) {
+static long reset_remaining_minutes() {
+  if (!g_reset_valid) return -1;
+  long remaining_ms = (long)(g_reset_deadline_ms - millis());
+  return remaining_ms > 0 ? (long)(((unsigned long)remaining_ms + 59999UL) / 60000UL) : 0;
+}
+
+static void draw_token_bar(int used, int total, long reset_minutes) {
   M5GFX &g = M5.Lcd;
 
   float ratio = total > 0 ? (float)used / total : 0.0f;
@@ -258,14 +265,11 @@ static void draw_token_bar(int used, int total) {
   }
 
   char reset_label[24] = "RESET --";
-  if (g_reset_valid) {
-    long remaining_ms = (long)(g_reset_deadline_ms - millis());
-    unsigned long remaining_minutes = remaining_ms > 0 ? ((unsigned long)remaining_ms + 59999UL) / 60000UL : 0;
-    g_reset_display_minutes = remaining_minutes;
-    if (remaining_minutes == 0) {
+  if (reset_minutes >= 0) {
+    if (reset_minutes == 0) {
       snprintf(reset_label, sizeof(reset_label), "RESET NOW");
     } else {
-      snprintf(reset_label, sizeof(reset_label), "RESET %luH%02luM", remaining_minutes / 60, remaining_minutes % 60);
+      snprintf(reset_label, sizeof(reset_label), "RESET %ldH%02ldM", reset_minutes / 60, reset_minutes % 60);
     }
   }
   g.setTextColor(TFT_DARKGREY);
@@ -380,7 +384,7 @@ static void draw_rabbit(PetState s) {
   );
   g.setSwapBytes(previous_swap_bytes);
 
-  draw_token_bar(g_token_used, g_token_total);
+  draw_token_bar(g_token_used, g_token_total, g_reset_display_minutes);
 
   g.endWrite();
 }
@@ -406,10 +410,10 @@ void loop() {
     g_redraw = true;
   }
 
-  if (g_reset_valid) {
-    long remaining_ms = (long)(g_reset_deadline_ms - millis());
-    long remaining_minutes = remaining_ms > 0 ? ((unsigned long)remaining_ms + 59999UL) / 60000UL : 0;
-    if (remaining_minutes != g_reset_display_minutes) g_redraw = true;
+  long remaining_minutes = reset_remaining_minutes();
+  if (remaining_minutes != g_reset_display_minutes) {
+    g_reset_display_minutes = remaining_minutes;
+    g_redraw = true;
   }
 
   if (g_redraw) { g_redraw = false; draw_rabbit(g_state); }
