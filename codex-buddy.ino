@@ -7,6 +7,7 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <limits.h>
 #include "background_bitmap.h"
 #include "rabbit_bitmaps.h"
 
@@ -35,6 +36,20 @@ int g_battery_level = -1;
 bool g_battery_charging = false;
 unsigned long g_last_battery_check_ms = 0;
 
+enum BuddyEventType { BLE_CONNECTED_EVENT, BLE_DISCONNECTED_EVENT, TOKEN_PAYLOAD_EVENT };
+
+struct BuddyEvent {
+  BuddyEventType type;
+  int token_used;
+  int token_total;
+  bool reset_valid;
+  long reset_seconds;
+  bool has_state;
+  PetState state;
+};
+
+QueueHandle_t g_buddy_event_queue = nullptr;
+
 static void update_battery_status(bool force = false) {
   unsigned long now = millis();
   if (!force && now - g_last_battery_check_ms < BATTERY_REFRESH_MS) return;
@@ -49,30 +64,44 @@ static void update_battery_status(bool force = false) {
   }
 }
 
-static void set_state_from_ble(bool connected) {
-  g_ble_connected = connected;
-  if (connected) {
-    g_ble_was_connected = true;
-    g_state = IDLE;
-  } else {
-    g_state = g_ble_was_connected ? ERROR_ST : SLEEP;
-  }
-  g_redraw = true;
-}
-
-static void apply_state_name(String state) {
+static bool parse_state_name(String state, PetState &parsed_state) {
   state.trim();
   state.toLowerCase();
 
-  if (state == "sleep") g_state = SLEEP;
-  else if (state == "idle") g_state = IDLE;
-  else if (state == "working") g_state = WORKING;
-  else if (state == "attention") g_state = ATTENTION;
-  else if (state == "done") {
-    g_state = DONE;
-    g_done_started_at = millis();
+  if (state == "sleep") parsed_state = SLEEP;
+  else if (state == "idle") parsed_state = IDLE;
+  else if (state == "working") parsed_state = WORKING;
+  else if (state == "attention") parsed_state = ATTENTION;
+  else if (state == "done") parsed_state = DONE;
+  else if (state == "error") parsed_state = ERROR_ST;
+  else return false;
+  return true;
+}
+
+static bool parse_integer_field(String field, long &value) {
+  field.trim();
+  if (field.length() == 0) return false;
+
+  int digit_start = 0;
+  bool negative = field[0] == '-';
+  if (negative || field[0] == '+') digit_start = 1;
+  if (digit_start == field.length()) return false;
+
+  unsigned long magnitude = 0;
+  const unsigned long limit = negative ? (unsigned long)LONG_MAX + 1UL : (unsigned long)LONG_MAX;
+  for (int i = digit_start; i < field.length(); ++i) {
+    if (field[i] < '0' || field[i] > '9') return false;
+    unsigned long digit = field[i] - '0';
+    if (magnitude > (limit - digit) / 10UL) return false;
+    magnitude = magnitude * 10UL + digit;
   }
-  else if (state == "error") g_state = ERROR_ST;
+
+  if (negative) {
+    value = magnitude == (unsigned long)LONG_MAX + 1UL ? LONG_MIN : -(long)magnitude;
+  } else {
+    value = (long)magnitude;
+  }
+  return true;
 }
 
 static bool parse_token_payload(String payload, int &used, int &total, String &state, long &reset_seconds) {
@@ -82,18 +111,63 @@ static bool parse_token_payload(String payload, int &used, int &total, String &s
   int second_comma = payload.indexOf(',', comma + 1);
   int third_comma = second_comma > 0 ? payload.indexOf(',', second_comma + 1) : -1;
 
-  int parsed_used = payload.substring(0, comma).toInt();
-  int parsed_total = payload.substring(comma + 1, second_comma > 0 ? second_comma : payload.length()).toInt();
-  if (parsed_total <= 0) return false;
+  long parsed_used = 0;
+  long parsed_total = 0;
+  if (!parse_integer_field(payload.substring(0, comma), parsed_used)) return false;
+  if (!parse_integer_field(
+        payload.substring(comma + 1, second_comma > 0 ? second_comma : payload.length()),
+        parsed_total
+      )) return false;
+  if (parsed_total <= 0 || parsed_total > INT_MAX) return false;
 
   if (parsed_used < 0) parsed_used = 0;
   if (parsed_used > parsed_total) parsed_used = parsed_total;
 
-  used = parsed_used;
-  total = parsed_total;
+  used = (int)parsed_used;
+  total = (int)parsed_total;
   state = second_comma > 0 ? payload.substring(second_comma + 1, third_comma > 0 ? third_comma : payload.length()) : "";
-  reset_seconds = third_comma > 0 ? payload.substring(third_comma + 1).toInt() : -1;
+  if (third_comma > 0) {
+    if (!parse_integer_field(payload.substring(third_comma + 1), reset_seconds)) return false;
+    if (reset_seconds < -1 || reset_seconds > LONG_MAX / 1000L) return false;
+  } else {
+    reset_seconds = -1;
+  }
   return true;
+}
+
+static void enqueue_buddy_event(const BuddyEvent &event) {
+  if (g_buddy_event_queue != nullptr) {
+    xQueueSend(g_buddy_event_queue, &event, portMAX_DELAY);
+  }
+}
+
+static void apply_buddy_event(const BuddyEvent &event) {
+  if (event.type == BLE_CONNECTED_EVENT) {
+    g_ble_connected = true;
+    g_ble_was_connected = true;
+    g_state = IDLE;
+  } else if (event.type == BLE_DISCONNECTED_EVENT) {
+    g_ble_connected = false;
+    g_state = g_ble_was_connected ? ERROR_ST : SLEEP;
+  } else {
+    g_token_used = event.token_used;
+    g_token_total = event.token_total;
+    g_reset_valid = event.reset_valid;
+    g_reset_deadline_ms = millis() + (unsigned long)max(0L, event.reset_seconds) * 1000UL;
+    g_reset_display_minutes = -1;
+    if (event.has_state) {
+      g_state = event.state;
+      if (event.state == DONE) g_done_started_at = millis();
+    }
+  }
+  g_redraw = true;
+}
+
+static void process_buddy_events() {
+  BuddyEvent event;
+  while (g_buddy_event_queue != nullptr && xQueueReceive(g_buddy_event_queue, &event, 0) == pdTRUE) {
+    apply_buddy_event(event);
+  }
 }
 
 class TokenCharacteristicCallbacks : public BLECharacteristicCallbacks {
@@ -103,26 +177,29 @@ class TokenCharacteristicCallbacks : public BLECharacteristicCallbacks {
     String state = "";
     long reset_seconds = -1;
     if (parse_token_payload(characteristic->getValue(), used, total, state, reset_seconds)) {
-      g_token_used = used;
-      g_token_total = total;
-      g_reset_valid = reset_seconds >= 0;
-      g_reset_deadline_ms = millis() + (unsigned long)max(0L, reset_seconds) * 1000UL;
-      g_reset_display_minutes = -1;
-      if (state.length() > 0) {
-        apply_state_name(state);
-      }
-      g_redraw = true;
+      BuddyEvent event = {};
+      event.type = TOKEN_PAYLOAD_EVENT;
+      event.token_used = used;
+      event.token_total = total;
+      event.reset_valid = reset_seconds >= 0;
+      event.reset_seconds = reset_seconds;
+      event.has_state = parse_state_name(state, event.state);
+      enqueue_buddy_event(event);
     }
   }
 };
 
 class BuddyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
-    set_state_from_ble(true);
+    BuddyEvent event = {};
+    event.type = BLE_CONNECTED_EVENT;
+    enqueue_buddy_event(event);
   }
 
   void onDisconnect(BLEServer *server) override {
-    set_state_from_ble(false);
+    BuddyEvent event = {};
+    event.type = BLE_DISCONNECTED_EVENT;
+    enqueue_buddy_event(event);
     server->startAdvertising();
   }
 };
@@ -311,6 +388,7 @@ static void draw_rabbit(PetState s) {
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
+  g_buddy_event_queue = xQueueCreate(16, sizeof(BuddyEvent));
   M5.Lcd.setRotation(0);
   M5.Lcd.fillScreen(TFT_BLACK);
   update_battery_status(true);
@@ -320,6 +398,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  process_buddy_events();
   update_battery_status();
 
   if (g_ble_connected && g_state == DONE && millis() - g_done_started_at >= DONE_HOLD_MS) {

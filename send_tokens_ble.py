@@ -108,8 +108,6 @@ class CodexSessionReader:
                 elif payload.get("type") == "task_complete":
                     self.latest_task_state = "done"
 
-        if self.latest_token is None:
-            raise RuntimeError(f"No token_count event found in {path}")
         return path, self.latest_token, self.latest_task_state
 
 
@@ -161,8 +159,17 @@ async def run_codex(args, client_type):
                 while client.is_connected and not disconnected.is_set():
                     try:
                         session_path, token_payload, state = session_reader.snapshot()
-                        used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
-                        reset_at = token_payload_to_reset_at(token_payload)
+                        if token_payload is None:
+                            if args.metric == "rate":
+                                used, total = last_used, last_total
+                            else:
+                                used, total = 0, args.session_budget
+                        else:
+                            used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
+                        if args.metric == "rate":
+                            reset_at = token_payload_to_reset_at(token_payload) if token_payload else last_reset_at
+                        else:
+                            reset_at = None
                         if first_codex_snapshot:
                             if state == "done":
                                 delivered_done_sessions.add(session_path)
