@@ -89,6 +89,14 @@ python3 send_tokens_ble.py --used 3200 --total 10000
 python3 send_tokens_ble.py --demo --total 10000
 ```
 
+Demo 模式也可以指定兔兔状态，用于同时测试 token 进度条和不同状态画面：
+
+```bash
+python3 send_tokens_ble.py --demo --total 10000 --state working
+```
+
+`--state` 支持 `sleep`、`idle`、`working`、`attention`、`done` 和 `error`，默认值为 `idle`。该参数仅用于 `--demo` 模式；`--codex` 模式会根据 Codex 任务生命周期自动选择状态。
+
 读取本机最新 Codex 会话的真实统计并持续发送：
 
 ```bash

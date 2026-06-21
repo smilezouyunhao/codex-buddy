@@ -228,7 +228,7 @@ async def run(args):
         if args.demo:
             used = args.used
             while True:
-                await send_once(client, used, args.total)
+                await send_once(client, used, args.total, args.state)
                 used += args.step
                 if used > args.total:
                     used = 0
@@ -242,6 +242,12 @@ def main():
     parser.add_argument("--used", type=int, default=3200, help="Used tokens.")
     parser.add_argument("--total", type=int, default=10000, help="Token budget.")
     parser.add_argument("--demo", action="store_true", help="Continuously send simulated token usage.")
+    parser.add_argument(
+        "--state",
+        choices=("sleep", "idle", "working", "attention", "done", "error"),
+        default="idle",
+        help="Pet state used by demo mode.",
+    )
     parser.add_argument("--codex", action="store_true", help="Continuously send token data from the latest Codex session JSONL.")
     parser.add_argument(
         "--metric",
