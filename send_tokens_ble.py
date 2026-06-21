@@ -161,15 +161,18 @@ async def run_codex(args, client_type):
                         session_path, token_payload, state = session_reader.snapshot()
                         if token_payload is None:
                             if args.metric == "rate":
-                                used, total = last_used, last_total
+                                if last_reset_at is not None and last_reset_at <= time.time():
+                                    used, total = 0, 100
+                                    reset_at = None
+                                else:
+                                    used, total = last_used, last_total
+                                    reset_at = last_reset_at
                             else:
                                 used, total = 0, args.session_budget
+                                reset_at = None
                         else:
                             used, total = token_payload_to_progress(token_payload, args.metric, args.session_budget)
-                        if args.metric == "rate":
-                            reset_at = token_payload_to_reset_at(token_payload) if token_payload else last_reset_at
-                        else:
-                            reset_at = None
+                            reset_at = token_payload_to_reset_at(token_payload) if args.metric == "rate" else None
                         if first_codex_snapshot:
                             if state == "done":
                                 delivered_done_sessions.add(session_path)
