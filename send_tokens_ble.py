@@ -7,13 +7,11 @@ import glob
 import json
 import os
 import time
-from datetime import date, timedelta
 
 
 DEVICE_NAME = "Codex Buddy"
 TOKEN_CHAR_UUID = "7b4f6a11-6d5f-4a6e-9e6f-4f7b6f9a1001"
 DEFAULT_CODEX_SESSIONS_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
-CODEX_SESSIONS_ROOT = os.path.expanduser("~/.codex/sessions")
 SESSION_SCAN_INTERVAL = 5.0
 
 
@@ -41,15 +39,7 @@ async def send_once(client: BleakClient, used: int, total: int, state: str | Non
 
 
 def latest_codex_session():
-    paths = []
-    today = date.today()
-    for day in (today, today - timedelta(days=1)):
-        day_dir = os.path.join(CODEX_SESSIONS_ROOT, day.strftime("%Y/%m/%d"))
-        paths.extend(glob.glob(os.path.join(day_dir, "*.jsonl")))
-    if not paths:
-        # Preserve compatibility with custom/legacy layouts without making the
-        # full-history scan part of the normal polling path.
-        paths = glob.glob(DEFAULT_CODEX_SESSIONS_GLOB, recursive=True)
+    paths = glob.glob(DEFAULT_CODEX_SESSIONS_GLOB, recursive=True)
     if not paths:
         raise RuntimeError("No Codex session JSONL files found under ~/.codex/sessions")
     return max(paths, key=os.path.getmtime)
@@ -263,6 +253,10 @@ def main():
         raise SystemExit("--used must be greater than or equal to 0")
     if args.session_budget <= 0:
         raise SystemExit("--session-budget must be greater than 0")
+    if args.interval <= 0:
+        raise SystemExit("--interval must be greater than 0")
+    if args.scan_timeout <= 0:
+        raise SystemExit("--scan-timeout must be greater than 0")
     if args.reconnect_delay < 0:
         raise SystemExit("--reconnect-delay must be greater than or equal to 0")
 
